@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Web Bluetooth Demo</title>
+  <meta charset="UTF-8">
+  	<link rel="stylesheet" href="https://unpkg.com/mvp.css">
+</head>
+<body>
+  <div class="container">
+    <h2>Kitronic Buggy</h2>
+    <button id="connectButton" class="button" onclick="discoverDevices()">Connect</button>
+    <button id="disconnectButton" class="button" onclick="disconnectFromDevice()" >Disconnect</button>
+    <button id="forgetButton" class="button" onclick="forgetDevice()" >Forget</button>
+    <button id="editOnGitHub" class="button" onclick="window.open('https://github.com/murkle/Pico_WebBluetooth_Read_Temperature/blob/main/index.html', '_blank').focus();" >Edit on GitHub</button>
+<br>
+    <button class="button" onclick="sendCommand([0])" >Get info</button>
+    <button class="button" onclick="sendCommand([1])" >Beep horn</button>
+    <button class="button" onclick="sendCommand([2,100])" >Left Motor forwards</button>
+    <button class="button" onclick="sendCommand([2,-100])" >Left Motor backwards</button>
+    <button class="button" onclick="sendCommand([2,0])" >Left Motor stop</button>
+    <button class="button" onclick="sendCommand([3,100])" >Right Motor forwards</button>
+    <button class="button" onclick="sendCommand([3,-100])" >Right Motor backwards</button>
+    <button class="button" onclick="sendCommand([3,0])" >Right Motor stop</button>
+    <button class="button" onclick="sendCommand([4,255])" >LED brightness full</button>
+    <button class="button" onclick="sendCommand([4,0])" >LEDs off</button>
+    <button class="button" onclick="sendCommand([5,0, 255, 0, 0])" >First LED to red</button>
+
+
+    <br><br>
+    <div id="result"></div>
+   <br><br>
+    <div id="logging"></div>
+  </div>
+
+  <script>
+  
+  const SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E".toLowerCase();
+  const CHARACTERISTIC_TX = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E".toLowerCase();
+  const CHARACTERISTIC_RX = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E".toLowerCase();
+  
+
+	// randomly changes between these two and "Unknown device" TODO: check
+  const namePrefix = "MPY BTSTACK";
+  //const namePrefix = "mpy-uart";
+  let service;
+  let device;
+  const logElement = document.getElementById('logging'); ;
+
+  function log(message) {
+      const logEntry = document.createElement('div');
+      logEntry.classList.add('log-entry');
+      logEntry.innerText = message;
+
+      logElement.appendChild(logEntry);
+  }
+
+  function handleDisconnect() {
+      log('Connection lost. Device disconnected.');
+      document.getElementById('connectButton').disabled = false;
+      document.getElementById('disconnectButton').disabled = true;
+      alert('Connection lost. Device disconnected.');
+  }
+
+  function disconnectFromDevice() {
+      if (device && device.gatt.connected) {
+          device.gatt.disconnect();
+      }
+  }
+
+  function forgetDevice() {
+      if (device) {
+          device.forget();
+      }
+  }
+
+  async function discoverDevices() {
+      log("discoverDevices");
+      let filters = [];
+      // name is eg "Pico 28:CD:C1:0B:EA:62"
+      filters.push({
+          "namePrefix": namePrefix
+      });
+      let options = {
+          "optionalServices": [SERVICE_UUID]
+      };
+	  
+	  // One or the other only
+	  options.acceptAllDevices = true;
+      //options.filters = filters;
+
+      device = await navigator.bluetooth.requestDevice(options);
+
+      log('> Name:' + device.name);
+      log('> Id:' + device.id);
+      log(device);
+
+      await connectToDevice(device);
+
+      log('Notifications have been started.');
+  }
+  
+  var characteristicRX, characteristicTX;
+
+  async function connectToDevice(device) {
+
+      device.addEventListener('gattserverdisconnected', onDisconnected);
+
+      log('Connecting to GATT Server...');
+      const server = await device.gatt.connect();
+
+      log('Getting Service...');
+      const service = await server.getPrimaryService(SERVICE_UUID);
+
+      log('Getting Serial Port Read Characteristic...');
+      characteristicRX = await service.getCharacteristic(CHARACTERISTIC_RX);
+      characteristicRX.addEventListener('characteristicvaluechanged', handleData);
+
+	  characteristicTX = await service.getCharacteristic(CHARACTERISTIC_TX);
+
+
+      log('Enabling notifications...');
+      await characteristicRX.startNotifications();
+      log('Connected to ' + device.name);
+
+  }
+  
+  function sendCommand(command) {
+		characteristicTX.writeValue(new Uint8Array(command));
+  }
+
+  function handleDistanceChanged(event) {
+      const value = event.target.value;
+      log('Got distance: ' + value.getFloat32(0, true));
+
+      document.getElementById("result").innerHTML = "Distance = " + value.getFloat32(0, true).toFixed(4) + " m";
+  }
+
+  function handleData(event) {
+      const jsonBytes = new Uint8Array(event.target.value.buffer);
+      console.log("jsonBytes device", jsonBytes);
+
+      const jsonString = String.fromCharCode(...jsonBytes);
+
+      console.log("jsonString device", jsonString);
+
+      // eg {"device":"Pico W", "temperatureC":35.00288}
+      const json = JSON.parse(jsonString);
+
+      console.log("from device", json);
+
+      const temperature = json.temperatureC;
+
+      log('Got temp: ' + temperature);
+
+      document.getElementById("result").innerHTML = /*"Pico internal Temperature = " + temperature.toFixed(1) + " °C" +*/
+	  "<br>Button = " + (json.button ? "Pressed" : "Released") +
+	  "<br>Distance front = " + json.distanceFront.toFixed(1) +
+	  "<br>Distance rear = " + json.distanceRear.toFixed(1) +
+	  "<br>Line sensor (left) = " + json.lineSensorLeft +
+	  "<br>Line sensor (center) = " + json.lineSensorCenter +
+	  "<br>Line sensor (right) = " + json.lineSensorRight;
+
+  }
+  function onDisconnected(event) {
+      const device = event.target;
+      log(`Device ${device.name} is disconnected.`);
+  }
+
+  function log(message) {
+      const logEntry = document.createElement('div');
+      logEntry.classList.add('log-entry');
+      logEntry.innerText = message;
+
+      logElement.appendChild(logEntry);
+  }
+
+  // https://docs.google.com/document/d/1RF4D-60cQJWR1LoQeLBxxigrxJwYS8nLOE0qWmBF1eo/edit
+  // try to connect to existing device
+  async function getPermittedBluetoothDevices() {
+      let devices = await navigator.bluetooth.getDevices();
+      for (let device0 of devices) {
+          // Start a scan for each device before connecting to check that they're in
+          // range.
+          let abortController = new AbortController();
+          await device0.watchAdvertisements({
+              signal: abortController.signal
+          });
+          device0.addEventListener('advertisementreceived', async(evt) => {
+              // Stop the scan to conserve power on mobile devices.
+              abortController.abort();
+
+              // Advertisement data can be read from |evt|.
+              let deviceName = evt.name;
+              let uuids = evt.uuids;
+              let appearance = evt.appearance;
+              let pathloss = evt.txPower - evt.rssi;
+              let manufacturerData = evt.manufacturerData;
+              let serviceData = evt.serviceData;
+
+              //if (evt.device.name.startsWith(namePrefix)) {
+              //if (evt.device.name.toLowerCase().startsWith("mpy")) {
+
+                  log("Found previously connected device " + device0.name)
+
+                  // At this point, we know that the device is in range, and we can attempt
+                  // to connect to it.
+                  device = evt.device;
+                  await connectToDevice(device);
+              //} else {
+              //    log("Ignoring device " + device0.name + " as it doesn't start with " + namePrefix);
+              //}
+          });
+      }
+  }
+
+  getPermittedBluetoothDevices();
+
+  </script>
+</body>
+</html>
